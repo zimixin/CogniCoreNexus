@@ -1,0 +1,28 @@
+name: deep_analysis
+description: "Глубокий анализ — полный обход всех слоёв памяти"
+trigger_goals: ["analyze", "deep", "investigate", "root_cause"]
+max_iterations: 3
+steps:
+  - id: search_loci
+    action: loci_search
+    params:
+      level: 3
+      bfs_depth: 5
+    on_empty: warn
+
+  - id: search_genes
+    action: find_genes
+    params:
+      max_distance: 5
+    depends_on: [search_loci]
+
+  - id: inference
+    action: inference
+    params: {}
+    depends_on: [search_loci, search_genes]
+
+  - id: llm_analysis
+    action: llm_query
+    params:
+      template: "Проведи глубокий анализ на основе всего доступного контекста. Ищи корневые причины."
+    depends_on: [search_loci, search_genes, inference]

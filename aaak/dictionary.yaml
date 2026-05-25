@@ -1,0 +1,99 @@
+# AAAK Dictionary — сокращения для сверхплотного представления
+# Синтаксис: короткий_код: полное_имя
+# Группировка по категориям
+
+# --- Типы записей ---
+EVENT: "event"
+FACT: "fact"
+RULE: "rule"
+CONCEPT: "concept"
+PRINCIPLE: "principle"
+PATTERN: "pattern"
+MODEL: "model"
+GOAL: "goal"
+INTENT: "intention"
+ACTION: "action"
+OBSERVATION: "observation"
+INFERENCE: "inference"
+
+# --- Участники ---
+USR: "user"
+SYS: "system"
+AGT: "agent"
+LLM: "language_model"
+
+# --- Временные метки (сжатые) ---
+DT: "datetime"
+TS: "timestamp"
+TZ: "timezone"
+
+# --- Действия и предикаты ---
+ACT: "action"
+OBJ: "object"
+SUB: "subject"
+REL: "relation"
+ATTR: "attribute"
+VAL: "value"
+SRC: "source"
+DST: "destination"
+
+# --- Мета ---
+ID: "id"
+NME: "name"
+TAG: "tag"
+TAGS: "tags"
+DSC: "description"
+TYP: "type"
+VER: "version"
+CONF: "confidence"
+SEV: "severity"
+
+# --- Результаты ---
+OK: "success"
+ERR: "error"
+WARN: "warning"
+INFO: "info"
+FAIL: "failure"
+
+# --- Память ---
+LOC: "locus"
+GEN: "gene"
+WM: "working_memory"
+AAAK: "aaak_summary"
+CTX: "context"
+
+# --- Отношения ---
+CAU: "causes"
+CTR: "contradicts"
+SOL: "solves"
+ISA: "is_a"
+DEP: "depends_on"
+PRT: "part_of"
+EXM: "example_of"
+GENR: "generalizes"
+SPEC: "specializes"
+REQ: "requires"
+PRV: "proves"
+DSV: "disproves"
+
+# --- Программные концепты ---
+SRP: "Single Responsibility Principle"
+OCP: "Open-Closed Principle"
+LSP: "Liskov Substitution Principle"
+ISP: "Interface Segregation Principle"
+DIP: "Dependency Inversion Principle"
+SOLID: "SOLID_principles"
+API: "application_programming_interface"
+SDK: "software_development_kit"
+CLI: "command_line_interface"
+GUI: "graphical_user_interface"
+DB: "database"
+FS: "filesystem"
+OS: "operating_system"
+
+# --- Агенты и роли ---
+DEV: "developer"
+QA: "tester"
+PM: "project_manager"
+ARCH: "architect"
+REV: "reviewer"

@@ -1,0 +1,32 @@
+name: code_review_solid
+description: "Ревью кода на соответствие принципам SOLID"
+trigger_goals: ["review_code", "check_solid", "solid", "refactor"]
+max_iterations: 1
+steps:
+  - id: find_principles
+    action: find_genes
+    params:
+      type: principle
+      tags: ["SOLID"]
+    on_empty: skip
+
+  - id: search_loci
+    action: loci_search
+    params:
+      tags: ["code", "smell", "violation"]
+    depends_on: [find_principles]
+
+  - id: inference
+    action: inference
+    params: {}
+    depends_on: [find_principles, search_loci]
+
+  - id: llm_analysis
+    action: llm_query
+    params:
+      template: |
+        Принципы: {find_principles.result}
+        Контекст кода: {search_loci.result}
+        Найди все нарушения SOLID. Для каждого укажи:
+        тип, тяжесть (high/medium/low), рекомендацию.
+    depends_on: [find_principles, search_loci]

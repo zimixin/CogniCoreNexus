@@ -1,0 +1,26 @@
+name: general_inquiry
+description: "Общий запрос — поиск в памяти, логика, LLM"
+trigger_goals: ["ask", "query", "what", "why", "how", "?"]
+max_iterations: 1
+steps:
+  - id: search_loci
+    action: loci_search
+    params:
+      level: all
+    on_empty: warn
+
+  - id: search_genes
+    action: find_genes
+    params: {}
+    depends_on: [search_loci]
+
+  - id: inference
+    action: inference
+    params: {}
+    depends_on: [search_loci, search_genes]
+
+  - id: llm_analysis
+    action: llm_query
+    params:
+      template: "Ответь на запрос пользователя, используя контекст."
+    depends_on: [search_loci, search_genes, inference]

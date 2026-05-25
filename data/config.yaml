@@ -1,0 +1,67 @@
+# CogniCore Nexus — конфигурация
+# При первом запуске создаётся с настройками по умолчанию
+
+llm:
+  # Legacy: один провайдер (для обратной совместимости)
+  provider: "openai"
+  endpoint: "https://openrouter.ai/api/v1"
+  api_key: ""  # Берётся из OPENROUTER_API_KEY в env, если пусто
+  model_name: "deepseek/deepseek-v4-flash"
+  temperature: 0.7
+  max_tokens: 2048
+
+# Цепочка fallback-провайдеров (новый формат)
+# Провайдеры пробуются по порядку; при ошибке — следующий
+llm_providers:
+  - type: "openai"
+    endpoint: "https://openrouter.ai/api/v1"
+    api_key: ""  # Берётся из OPENROUTER_API_KEY в env, если пусто
+    model: "deepseek/deepseek-v4-flash"
+    timeout: 60
+  # Раскомментируй для локальных моделей:
+  # - type: "lmstudio"
+  #   endpoint: "http://localhost:1234/v1"
+  #   api_key: ""
+  #   model: "local-model"
+  #   timeout: 30
+  # - type: "ollama"
+  #   endpoint: "http://localhost:11434"
+  #   api_key: ""
+  #   model: "llama3.2"
+  #   timeout: 60
+
+memory:
+  use_vectors: false
+  vector_backend: "numpy"  # "numpy", "annoy", или "none"
+  vector_model: "all-MiniLM-L6-v2"  # модель эмбеддингов (квантованная)
+  search_threshold: 0.7  # порог уверенности для L0-L3 остановки
+
+cognition:
+  working_memory_size: 20     # макс. элементов в рабочей памяти
+  max_inference_steps: 50     # лимит шагов логического вывода
+  max_planning_depth: 5       # глубина планирования
+
+loci:
+  data_dir: "data/loci"
+  default_wings:
+    - id: "wing_general"
+      name: "Общее"
+      rooms:
+        - id: "room_general"
+          name: "Общая"
+          tags: ["general", "common"]
+        - id: "room_system"
+          name: "Система"
+          tags: ["system", "meta"]
+
+genome:
+  db_path: "data/genome.db"
+
+aaak:
+  dictionary: "aaak/dictionary.yaml"
+  domain_profiles_dir: "aaak/domain_profiles/"
+  auto_shorten_threshold: 5  # если сущность встречена >N раз, создаётся алиас
+
+api:
+  mcp_http_port: 9100
+  mcp_transport: "stdio"     # "stdio" или "http"
