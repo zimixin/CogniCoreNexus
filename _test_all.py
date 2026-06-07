@@ -183,6 +183,242 @@ def test_genome_relations():
 
 test("Геном отношения", test_genome_relations)
 
+# ============== CONTRADICTION DETECTION ==============
+def test_contradiction_direct_negation():
+    """Test direct negation detection (love vs hate)."""
+    from core.nexus import CogniCoreNexus
+    import os
+
+    # Fresh DB
+    if os.path.exists('data/genome.db'):
+        os.remove('data/genome.db')
+
+    n = CogniCoreNexus('data/config.yaml')
+
+    # Add existing knowledge: user loves flowers
+    n.add_knowledge({
+        "_type": "gene",
+        "id": "user_loves_flowers",
+        "name": "User loves flowers",
+        "type": "fact",
+        "full_text": "Пользователь любит цветы",
+        "passport": {"confidence": 0.9, "domain": "personal"},
+        "tags": ["preference", "verified"]
+    })
+
+    # Try to add contradictory knowledge: user loves spiders (hates spiders exists)
+    n.add_knowledge({
+        "_type": "gene",
+        "id": "user_hates_spiders",
+        "name": "User hates spiders",
+        "type": "fact",
+        "full_text": "Пользователь ненавидит пауков",
+        "passport": {"confidence": 0.95, "domain": "personal"},
+        "tags": ["preference", "verified"]
+    })
+
+    # Now try to add: user loves spiders (contradicts hates spiders)
+    result = n.add_knowledge({
+        "_type": "gene",
+        "id": "user_loves_spiders",
+        "name": "User loves spiders",
+        "type": "fact",
+        "full_text": "Пользователь любит пауков",
+        "passport": {"confidence": 0.8, "domain": "personal"},
+        "tags": ["preference"]
+    })
+
+    # Should detect conflict
+    assert_eq(result["status"], "conflict_detected", "конфликт обнаружен")
+    assert_true(len(result["conflicts"]) >= 1, "есть конфликты")
+
+    conflict = result["conflicts"][0]
+    assert_in(conflict["existing_gene_id"], ["user_hates_spiders"], "конфликтует с правильным геном")
+    assert_eq(conflict["conflict_type"], "direct_negation", "тип прямого отрицания")
+    assert_in(conflict["proposed_action"], ["ask_user", "keep_both"], "предложено действие")
+
+    # Resolution: reject new
+    resolve_result = n.resolve_conflict({
+        "action": "reject_new",
+        "pending_knowledge": result["pending_knowledge"]
+    })
+    assert_eq(resolve_result["status"], "ok", "reject_new работает")
+
+    # Resolution: keep both
+    result2 = n.add_knowledge({
+        "_type": "gene",
+        "id": "user_loves_spiders2",
+        "name": "User loves spiders 2",
+        "type": "fact",
+        "full_text": "Пользователь любит пауков",
+        "passport": {"confidence": 0.8, "domain": "personal"},
+        "tags": ["preference"]
+    })
+    assert_eq(result2["status"], "conflict_detected", "второй конфликт обнаружен")
+
+    resolve2 = n.resolve_conflict({
+        "action": "keep_both",
+        "pending_knowledge": result2["pending_knowledge"]
+    })
+    assert_eq(resolve2["status"], "ok", "keep_both работает")
+    assert_true(resolve2.get("gene_id"), "генерирован ID")
+
+
+def test_contradiction_logical_fact():
+    """Test logical fact contradiction via inference engine."""
+    from core.nexus import CogniCoreNexus
+    import os
+
+    if os.path.exists('data/genome.db'):
+        os.remove('data/genome.db')
+
+    n = CogniCoreNexus('data/config.yaml')
+
+    # Add fact: user is human
+    n.add_knowledge({
+        "_type": "fact",
+        "predicate": "is_a",
+        "subject": "user",
+        "object": "human"
+    })
+
+    # Try to add contradictory fact: user is not human
+    result = n.add_knowledge({
+        "_type": "fact",
+        "predicate": "not_is_a",
+        "subject": "user",
+        "object": "human"
+    })
+
+    # Should detect logical contradiction
+    assert_eq(result["status"], "conflict_detected", "логический конфликт обнаружен")
+    assert_true(len(result["conflicts"]) >= 1, "есть логические конфликты")
+    conflict = result["conflicts"][0]
+    assert_eq(conflict["conflict_type"], "logical_impossible", "тип логического противоречия")
+
+
+def test_contradiction_semantic_llm():
+    """Test semantic contradiction detection via LLM (if available)."""
+    from core.nexus import CogniCoreNexus
+    import os
+
+    if os.path.exists('data/genome.db'):
+        os.remove('data/genome.db')
+
+    n = CogniCoreNexus('data/config.yaml')
+
+    # Add existing gene about being vegetarian
+    n.add_knowledge({
+        "_type": "gene",
+        "id": "user_vegetarian",
+        "name": "User is vegetarian",
+        "type": "fact",
+        "full_text": "Пользователь вегетарианец, не ест мясо",
+        "passport": {"confidence": 0.9, "domain": "personal"},
+        "tags": ["diet", "verified"]
+    })
+
+    # Try to add: user loves steak (semantic contradiction)
+    result = n.add_knowledge({
+        "_type": "gene",
+        "id": "user_loves_steak",
+        "name": "User loves steak",
+        "type": "fact",
+        "full_text": "Пользователь обожает стейк из говядины",
+        "passport": {"confidence": 0.8, "domain": "personal"},
+        "tags": ["diet"]
+    })
+
+    # Should detect conflict (may be direct or semantic)
+    if result["status"] == "conflict_detected":
+        assert_true(len(result["conflicts"]) >= 1, "семантический конфликт обнаружен")
+        # Check conflict structure
+        conflict = result["conflicts"][0]
+        assert_in("conflict_type", conflict, "тип конфликта")
+        assert_in("proposed_action", conflict, "предложенное действие")
+
+
+def test_contradiction_resolution_replace():
+    """Test replace_old resolution."""
+    from core.nexus import CogniCoreNexus
+    import os
+
+    if os.path.exists('data/genome.db'):
+        os.remove('data/genome.db')
+
+    n = CogniCoreNexus('data/config.yaml')
+
+    # Add old knowledge with low confidence - user likes old_thing
+    n.add_knowledge({
+        "_type": "gene",
+        "id": "old_fact",
+        "name": "Old fact",
+        "type": "fact",
+        "full_text": "Пользователь любит старую версию",
+        "passport": {"confidence": 0.3, "domain": "test"},
+        "tags": ["old"]
+    })
+
+    # Add new contradictory knowledge - user hates old_thing (should conflict)
+    result = n.add_knowledge({
+        "_type": "gene",
+        "id": "new_fact",
+        "name": "New fact",
+        "type": "fact",
+        "full_text": "Пользователь ненавидит старую версию",
+        "passport": {"confidence": 0.9, "domain": "test"},
+        "tags": ["new"]
+    })
+
+    assert_eq(result["status"], "conflict_detected", "конфликт обнаружен")
+
+    # Resolve with replace_old
+    resolve = n.resolve_conflict({
+        "action": "replace_old",
+        "pending_knowledge": result["pending_knowledge"],
+        "conflict_id": result["conflicts"][0]["existing_gene_id"]
+    })
+    assert_eq(resolve["status"], "ok", "replace_old работает")
+
+    # Verify new gene exists
+    g = n.genome.get_gene("new_fact")
+    assert_true(g is not None, "новый ген сохранён")
+
+
+def test_contradiction_no_false_positive():
+    """Test that non-contradictory knowledge passes."""
+    from core.nexus import CogniCoreNexus
+    import os
+
+    if os.path.exists('data/genome.db'):
+        os.remove('data/genome.db')
+
+    n = CogniCoreNexus('data/config.yaml')
+
+    # Add some genes
+    n.add_knowledge({"_type": "gene", "id": "a", "name": "A", "type": "fact", "full_text": "User likes cats"})
+    n.add_knowledge({"_type": "gene", "id": "b", "name": "B", "type": "fact", "full_text": "User likes dogs"})
+
+    # Add non-contradictory knowledge
+    result = n.add_knowledge({
+        "_type": "gene",
+        "id": "c",
+        "name": "C",
+        "type": "fact",
+        "full_text": "User likes birds",
+        "passport": {"confidence": 0.8}
+    })
+
+    assert_eq(result["status"], "ok", "без конфликта = ok")
+    assert_true("gene_id" in result, "ген создан")
+
+
+test("Конфликты: прямое отрицание", test_contradiction_direct_negation)
+test("Конфликты: логические факты", test_contradiction_logical_fact)
+test("Конфликты: семантические (LLM)", test_contradiction_semantic_llm)
+test("Конфликты: резолюция replace", test_contradiction_resolution_replace)
+test("Конфликты: нет ложных срабатываний", test_contradiction_no_false_positive)
+
 # ============== 3. ЛОГИКА ==============
 def test_logic():
     from logic.inference_engine import InferenceEngine

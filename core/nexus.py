@@ -16,6 +16,7 @@ import sqlite3
 from core.config import Config, PROJECT_ROOT
 from aaak.codec import AAAKCodec, AAAKDictionary
 from core.utils import timestamp, aaak_timestamp
+from core.contradiction_detector import ContradictionDetector, Conflict, ResolutionAction
 from symbols.symbol_manager import SymbolManager
 from logic.inference_engine import InferenceEngine
 from cognition.cognitive_arch import CognitiveArchitecture
@@ -46,6 +47,9 @@ class CogniCoreNexus:
         self._init_tom()
         self._init_symbols()
         self._init_logic()
+
+        # Initialize contradiction detector
+        self.contradiction_detector = ContradictionDetector(self)
 
         self.session_id = 0
         self.dialog_history: List[Dict] = []
@@ -547,9 +551,39 @@ class CogniCoreNexus:
     # ─── Публичные методы для MCP и CLI ──────────────────────────────
 
     def add_knowledge(self, data: Dict) -> Dict:
-        """Добавить знание в систему."""
+        """Добавить знание в систему с проверкой противоречий."""
         try:
             knowledge_type = data.get("_type", data.get("type", ""))
+
+            # Check for contradictions BEFORE saving (for genes and facts)
+            if knowledge_type in ("gene", "fact"):
+                conflicts = self.contradiction_detector.check(data)
+                if conflicts:
+                    return {
+                        "status": "conflict_detected",
+                        "conflicts": [
+                            {
+                                "existing_gene_id": c.existing_gene_id,
+                                "existing_text": c.existing_text,
+                                "existing_confidence": c.existing_confidence,
+                                "new_text": c.new_text,
+                                "conflict_type": c.conflict_type.value,
+                                "description": c.description,
+                                "proposed_action": c.proposed_action.value,
+                                "reasoning": c.reasoning
+                            }
+                            for c in conflicts
+                        ],
+                        "message": f"Обнаружено {len(conflicts)} противоречие(й). Требуется резолюция.",
+                        "resolution_options": {
+                            "reject_new": "Отклонить новое знание, оставить существующее",
+                            "replace_old": "Заменить существующее на новое",
+                            "keep_both": "Сохранить оба (пометить как конфликт)",
+                            "ask_user": "Запросить решение у пользователя"
+                        },
+                        "pending_knowledge": data  # Store for resolution
+                    }
+
             if knowledge_type == "gene":
                 gene_data = {k: v for k, v in data.items() if k != "_type"}
                 gene_id = self.genome.add_gene(gene_data)
@@ -577,6 +611,65 @@ class CogniCoreNexus:
             return {"status": "error", "message": f"Ошибка БД: {e}"}
         except Exception as e:
             logger.exception(f"Ошибка в add_knowledge")
+            return {"status": "error", "message": str(e)}
+
+    def resolve_conflict(self, resolution: Dict) -> Dict:
+        """Применить выбранную резолюцию конфликта и сохранить знание."""
+        try:
+            action = resolution.get("action")
+            pending = resolution.get("pending_knowledge")
+            conflict_index = resolution.get("conflict_index", 0)
+
+            if not pending:
+                return {"status": "error", "message": "Нет ожидающего знания для резолюции"}
+
+            if action == "reject_new":
+                return {"status": "ok", "message": "Новое знание отклонено, существующее сохранено"}
+
+            if action == "replace_old":
+                # Delete the conflicting gene first, then add new
+                conflict_id = resolution.get("conflict_id")
+                if conflict_id:
+                    self.genome.delete_gene(conflict_id)
+                return self.add_knowledge(pending)
+
+            if action == "keep_both":
+                # Add with conflict tag
+                if pending.get("_type") == "gene":
+                    gene_data = {k: v for k, v in pending.items() if k != "_type"}
+                    tags = gene_data.get("tags", [])
+                    if "conflict" not in tags:
+                        tags.append("conflict")
+                    if "uncertain" not in tags:
+                        tags.append("uncertain")
+                    gene_data["tags"] = tags
+                    gene_id = self.genome.add_gene(gene_data)
+                    return {"status": "ok", "gene_id": gene_id, "message": "Оба знания сохранены с тегами conflict/uncertain"}
+                elif pending.get("_type") == "fact":
+                    self.inference_engine.add_fact(
+                        pending.get("predicate", ""),
+                        pending.get("subject", ""),
+                        pending.get("object", ""),
+                    )
+                    return {"status": "ok", "message": "Факт сохранён (конфликт отмечен)"}
+
+            if action == "merge":
+                # Custom merge - user provides merged text
+                merged_text = resolution.get("merged_text")
+                if not merged_text:
+                    return {"status": "error", "message": "Для merge нужно указать merged_text"}
+                # Update existing gene with merged content
+                conflict_id = resolution.get("conflict_id")
+                if conflict_id:
+                    self.genome.update_gene(conflict_id, {"full_text": merged_text})
+                    return {"status": "ok", "message": "Знания объединены"}
+
+            if action == "ask_user":
+                return {"status": "pending", "message": "Ожидание решения пользователя"}
+
+            return {"status": "error", "message": f"Неизвестное действие: {action}"}
+        except Exception as e:
+            logger.exception(f"Ошибка в resolve_conflict")
             return {"status": "error", "message": str(e)}
 
     def recall(self, query: str, **kwargs) -> Dict:
