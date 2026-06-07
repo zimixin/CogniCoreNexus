@@ -144,6 +144,31 @@ class CogniCoreMCP:
                     },
                 ),
                 Tool(
+                    name="cognicore_check_fact",
+                    description="Проверить факт на противоречия с существующими знаниями. Возвращает найденные конфликты и рекомендацию.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "subject": {
+                                "type": "string",
+                                "description": "Субъект факта (например, '2ЭС6')"
+                            },
+                            "predicate": {
+                                "type": "string",
+                                "description": "Предикат (например, 'is_a', 'type_of', 'classification')"
+                            },
+                            "object": {
+                                "type": "string",
+                                "description": "Объект факта (например, 'электровоз', 'тепловоз')"
+                            },
+                            "statement": {
+                                "type": "string",
+                                "description": "Полное утверждение для проверки (альтернатива subject/predicate/object)"
+                            }
+                        }
+                    },
+                ),
+                Tool(
                     name="cognicore_simulate_agent",
                     description="Запустить Theory of Mind симуляцию для агента.",
                     inputSchema={
@@ -151,14 +176,14 @@ class CogniCoreMCP:
                         "properties": {
                             "agent_name": {
                                 "type": "string",
-                                "description": "Имя агента",
+                                "description": "Имя агента"
                             },
                             "context": {
                                 "type": "string",
-                                "description": "Контекст для симуляции",
-                            },
+                                "description": "Контекст для симуляции"
+                            }
                         },
-                        "required": ["agent_name"],
+                        "required": ["agent_name"]
                     },
                 ),
             ]
@@ -173,6 +198,7 @@ class CogniCoreMCP:
                 "cognicore_list_genes": self._handle_list_genes,
                 "cognicore_navigate_loci": self._handle_navigate_loci,
                 "cognicore_run_matrix": self._handle_run_matrix,
+                "cognicore_check_fact": self._handle_check_fact,
                 "cognicore_simulate_agent": self._handle_simulate_agent,
             }.get(name)
 
@@ -316,6 +342,106 @@ class CogniCoreMCP:
         matrix_name = args.get("matrix_name", "")
         result = self.nexus.run_matrix(matrix_name)
         return result
+
+    def _handle_check_fact(self, args: dict) -> dict:
+        """Проверить факт на противоречия с существующими знаниями."""
+        subject = args.get("subject", "").strip()
+        predicate = args.get("predicate", "").strip()
+        object_val = args.get("object", "").strip()
+        statement = args.get("statement", "").strip()
+
+        # Build search query
+        if statement:
+            search_query = statement
+        elif subject or object_val:
+            parts = [p for p in [subject, predicate, object_val] if p]
+            search_query = " ".join(parts)
+        else:
+            return {"error": "Нужно указать statement ИЛИ subject/predicate/object"}
+
+        # Search for existing knowledge about the subject
+        recall_result = self.nexus.recall(search_query)
+        genes = recall_result.get("genes", [])
+        loci = recall_result.get("loci", [])
+
+        # Analyze for contradictions
+        conflicts = []
+        supporting = []
+
+        for gene in genes:
+            gene_text = (gene.get("full_text") or gene.get("name") or "").lower()
+            gene_conf = gene.get("passport", {}).get("confidence", 0.5)
+            gene_tags = gene.get("tags", [])
+
+            # Check if gene mentions the subject
+            if subject and subject.lower() in gene_text:
+                # Check for direct contradiction
+                if object_val and object_val.lower() in gene_text:
+                    # Same subject and object mentioned - check if classification differs
+                    # This is a simple heuristic - in reality LLM would do better
+                    conflicts.append({
+                        "existing_gene_id": gene["id"],
+                        "existing_text": gene.get("full_text", gene.get("name", "")),
+                        "existing_confidence": gene_conf,
+                        "conflict_type": "classification_mismatch",
+                        "description": f"Найдено утверждение про {subject}: '{gene.get('full_text', gene.get('name', ''))}'",
+                        "severity": "high" if gene_conf > 0.8 else "medium"
+                    })
+                else:
+                    # Related info about subject
+                    supporting.append({
+                        "gene_id": gene["id"],
+                        "text": gene.get("full_text", gene.get("name", "")),
+                        "confidence": gene_conf,
+                        "tags": gene_tags
+                    })
+
+        # Also check logical facts in inference engine
+        logical_conflicts = []
+        if subject and predicate and object_val:
+            # Check for opposite predicate
+            negated_pred = f"not_{predicate}" if not predicate.startswith("not_") else predicate[4:]
+            existing = self.nexus.inference_engine.query(negated_pred, subject, object_val)
+            if existing:
+                logical_conflicts.append({
+                    "type": "logical_contradiction",
+                    "fact": f"{negated_pred}({subject}, {object_val})",
+                    "description": f"В логическом движке существует противоречащий факт: {negated_pred}({subject}, {object_val})"
+                })
+
+        # Build recommendation
+        has_high_conflict = any(c.get("severity") == "high" for c in conflicts)
+        has_logical = len(logical_conflicts) > 0
+
+        if has_high_conflict or has_logical:
+            recommendation = "reject_or_verify"
+            message = "Обнаружены противоречия с высокой достоверностью существующих знаний."
+        elif conflicts:
+            recommendation = "verify"
+            message = "Найдена связанная информация, требуется проверка."
+        else:
+            recommendation = "safe_to_add"
+            message = "Прямых противоречий не найдено."
+
+        return {
+            "status": "checked",
+            "query": search_query,
+            "subject": subject,
+            "predicate": predicate,
+            "object": object_val,
+            "recommendation": recommendation,
+            "message": message,
+            "conflicts": conflicts,
+            "logical_conflicts": logical_conflicts,
+            "supporting_info": supporting,
+            "summary": {
+                "total_genes_found": len(genes),
+                "total_loci_found": len(loci),
+                "conflicts_count": len(conflicts),
+                "logical_conflicts_count": len(logical_conflicts),
+                "supporting_count": len(supporting)
+            }
+        }
 
     def _handle_simulate_agent(self, args: dict) -> dict:
         """Обработать ToM симуляцию."""
