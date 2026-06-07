@@ -182,7 +182,18 @@ class CogniCoreMCP:
                     text=json.dumps({"error": f"Инструмент не найден: {name}"}),
                 )]
 
-            return handler(arguments)
+            try:
+                result = handler(arguments)
+                # Ensure result is valid JSON
+                if isinstance(result, list):
+                    return result
+                return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+            except Exception as e:
+                logger.exception("Tool call error")
+                return [TextContent(
+                    type="text",
+                    text=json.dumps({"error": str(e)}, ensure_ascii=False),
+                )]
 
         @self.app.list_resources()
         async def list_resources() -> list[Resource]:
@@ -264,23 +275,20 @@ class CogniCoreMCP:
 
     # --- Обработчики инструментов ---
 
-    def _handle_query(self, args: dict) -> list[TextContent]:
+    def _handle_query(self, args: dict) -> dict:
         """Обработать запрос к когнитивной системе."""
         query = args.get("query", "")
         if not query:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": "Параметр 'query' обязателен"}),
-            )]
+            return {"error": "Параметр 'query' обязателен"}
         result = self.nexus.process_query(query)
-        return [TextContent(type="text", text=str(result))]
+        return result
 
-    def _handle_add_knowledge(self, args: dict) -> list[TextContent]:
+    def _handle_add_knowledge(self, args: dict) -> dict:
         """Обработать добавление знания."""
         result = self.nexus.add_knowledge(args)
-        return [TextContent(type="text", text=str(result))]
+        return result
 
-    def _handle_recall(self, args: dict) -> list[TextContent]:
+    def _handle_recall(self, args: dict) -> dict:
         """Обработать извлечение из памяти."""
         query = args.get("query", "")
         max_results = args.get("max_results", 10)
@@ -289,32 +297,32 @@ class CogniCoreMCP:
             for k in ("loci", "genes"):
                 if k in result and isinstance(result[k], list):
                     result[k] = result[k][:max_results]
-        return [TextContent(type="text", text=str(result))]
+        return result
 
-    def _handle_list_genes(self, args: dict) -> list[TextContent]:
+    def _handle_list_genes(self, args: dict) -> dict:
         """Обработать запрос списка генов."""
         type_filter = args.get("type_filter")
         result = self.nexus.list_genes(type_filter=type_filter)
-        return [TextContent(type="text", text=str(result))]
+        return result
 
-    def _handle_navigate_loci(self, args: dict) -> list[TextContent]:
+    def _handle_navigate_loci(self, args: dict) -> dict:
         """Обработать навигацию по локусам."""
         room_id = args.get("room_id", "")
         result = self.nexus.navigate_loci(room_id)
-        return [TextContent(type="text", text=str(result))]
+        return result
 
-    def _handle_run_matrix(self, args: dict) -> list[TextContent]:
+    def _handle_run_matrix(self, args: dict) -> dict:
         """Обработать запуск когнитивной матрицы."""
         matrix_name = args.get("matrix_name", "")
         result = self.nexus.run_matrix(matrix_name)
-        return [TextContent(type="text", text=str(result))]
+        return result
 
-    def _handle_simulate_agent(self, args: dict) -> list[TextContent]:
+    def _handle_simulate_agent(self, args: dict) -> dict:
         """Обработать ToM симуляцию."""
         agent_name = args.get("agent_name", "")
         context = args.get("context", "")
         result = self.nexus.tom.predict_action(agent_name, context)
-        return [TextContent(type="text", text=str(result))]
+        return result
 
     # --- Запуск ---
 
