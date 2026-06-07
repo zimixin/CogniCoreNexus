@@ -7,8 +7,8 @@
 ```bash
 # На Android/Termux:
 pkg install python git -y
-git clone https://github.com/your-username/cognicore_nexus
-cd cognicore_nexus
+git clone https://github.com/zimixin/CogniCoreNexus
+cd CogniCoreNexus
 pip install -r requirements.txt
 python3 seed.py                  # заполнить тестовыми данными
 python3 main.py cli              # запустить CLI

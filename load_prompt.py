@@ -4,13 +4,14 @@
 Создаёт гены для ключевых концептов и сохраняет весь текст в локусы.
 """
 import sys
-sys.path.insert(0, '/data/data/com.termux/files/home/cognicore_nexus')
+sys.path.insert(0, '.')
+
 from core.nexus import CogniCoreNexus
 
 nexus = CogniCoreNexus('data/config.yaml')
 
 # Читаем промпт из файла
-prompt_path = '/data/data/com.termux/files/home/cognicore_nexus/data/original_prompt.txt'
+prompt_path = 'data/original_prompt.txt'
 with open(prompt_path, 'r', encoding='utf-8') as f:
     prompt_text = f.read()
 
@@ -21,7 +22,7 @@ print()
 print("=== Сохраняю промпт в пространственную память (Локусы) ===")
 from aaak.codec import AAAKCodec, AAAKDictionary
 from pathlib import Path
-dict_path = Path('/data/data/com.termux/files/home/cognicore_nexus/aaak/dictionary.yaml')
+dict_path = Path('aaak/dictionary.yaml')
 aaak_dict = AAAKDictionary(str(dict_path))
 codec = AAAKCodec(aaak_dict)
 
@@ -37,11 +38,11 @@ compressed = codec.encode({
         "llm_integration", "tools", "cli", "cross_platform"
     ]
 })
-nexus.palace.add_to_room("room_system", compressed)
+nexus.palace.add_to_room("wing_general/room_system", compressed)
 print(f"  AAAK-запись добавлена в Системную комнату")
 
 # Сохраняем verbatim-текст рядом
-verbatim_path = Path('/data/data/com.termux/files/home/cognicore_nexus/data/loci/wing_general/room_system/verbatim_prompt_v1.txt')
+verbatim_path = Path('data/loci/wing_general/room_system/verbatim_prompt_v1.txt')
 verbatim_path.write_text(prompt_text, encoding='utf-8')
 print(f"  Полный текст сохранён: {verbatim_path}")
 
@@ -224,5 +225,5 @@ print(f"  Связей: {len(relations)}")
 print(f"  Фактов: {len(facts)}")
 print(f"  Локусов: {len(nexus.palace.rooms)} комнат")
 print(f"  Выводов: {len(inferences)}")
-print(f"  Verbatim: {verbatim_path}")
+print(f"  Verbatim: data/loci/wing_general/room_system/verbatim_prompt_v1.txt")
 print("========================================")
