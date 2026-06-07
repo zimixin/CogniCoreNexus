@@ -760,7 +760,8 @@ def test_mcp():
             assert_in("cognicore_navigate_loci", tool_names, "инструмент loci")
             assert_in("cognicore_run_matrix", tool_names, "инструмент matrix")
             assert_in("cognicore_simulate_agent", tool_names, "инструмент tom")
-            assert_eq(len(tool_names), 7, "7 инструментов всего")
+            assert_in("cognicore_check_fact", tool_names, "инструмент check_fact")
+            assert_eq(len(tool_names), 8, "8 инструментов всего")
 
             # 9.2 tools/call cognicore_query
             call_result = await session.call_tool(
