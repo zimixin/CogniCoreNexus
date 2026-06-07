@@ -22,6 +22,9 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 
 
+AAAK_VERSION = 1
+
+
 class AAAKDictionary:
     """Загружает и управляет словарём сокращений."""
 
@@ -66,10 +69,14 @@ class AAAKDictionary:
         if name in self.name_to_code:
             return self.name_to_code[name]
 
-        # Авто-сокращение: первые 3-4 буквы в верхнем регистре
+        # Авто-сокращение: первые буквы слов в верхнем регистре
         short = "".join(w[0].upper() for w in name.split() if w)
         if len(short) < 2:
             short = name[:3].upper()
+        # Если код занят ДРУГИМ именем — не сокращаем (используем оригинал)
+        if short in self.code_to_name and self.code_to_name[short] != name:
+            self.name_to_code[name] = name
+            return name
         self.name_to_code[name] = short
         self.code_to_name[short] = name
         return short
@@ -96,7 +103,7 @@ class AAAKCodec:
     """
 
     # Регулярка для токенизации: строки в кавычках, скобки, :поля, числа с точкой, прочее
-    _TOKEN_PATTERN = r'"[^"]*"|\(|\)|:[a-z_]+|[^\s()]+|\d+\.\d+'
+    _TOKEN_PATTERN = r'"[^"]*"|\(|\)|:[a-zA-Z_]+|[^\s()]+|\d+\.\d+'
 
     def __init__(self, dictionary: Optional[AAAKDictionary] = None):
         self.dict = dictionary or AAAKDictionary()
@@ -120,6 +127,10 @@ class AAAKCodec:
 
         # КОПИРУЕМ, чтобы не мутировать оригинал
         data = {k: v for k, v in data.items()}
+
+        # Добавляем версию формата
+        result_with_version = {"_aaak_version": AAAK_VERSION}
+        data = {**result_with_version, **data}
 
         # Определяем тип и id
         entry_type = data.pop("type", None) or data.pop("_type", None) or "ITEM"
@@ -184,13 +195,29 @@ class AAAKCodec:
     # ──────────────────────────────────────────────
 
     def decode(self, text: str) -> Dict[str, Any]:
-        """
-        Разбирает AAAK S-выражение в словарь.
+        """Разбирает AAAK S-выражение в словарь.
         Использует рекурсивный descent парсер.
         """
         text = text.strip()
         if not text.startswith("("):
             raise ValueError(f"Неверный AAAK-формат: ожидается '(' в начале:\n{text[:100]}")
+
+        # Пред-валидация: баланс скобок и кавычек
+        open_parens = 0
+        in_quote = False
+        for i, ch in enumerate(text):
+            if ch == '"':
+                in_quote = not in_quote
+            elif ch == '(' and not in_quote:
+                open_parens += 1
+            elif ch == ')' and not in_quote:
+                open_parens -= 1
+                if open_parens < 0:
+                    raise ValueError(f"Несбалансированные скобки: лишняя ')' на позиции {i}")
+        if in_quote:
+            raise ValueError("Незакрытая кавычка в AAAK-строке")
+        if open_parens > 0:
+            raise ValueError(f"Несбалансированные скобки: не хватает {open_parens} ')'")
 
         tokens = self._tokenize(text)
         parsed, pos = self._parse_expr(tokens, 0)
@@ -219,7 +246,7 @@ class AAAKCodec:
         """
         return re.findall(self._TOKEN_PATTERN, text)
 
-    def _parse_expr(self, tokens: List[str], pos: int) -> tuple:
+    def _parse_expr(self, tokens: List[str], pos: int) -> tuple[Any, int]:
         """Парсит одно выражение: S-выражение или атом.
         Возвращает (parsed_value, next_pos)."""
         if pos >= len(tokens):
@@ -232,8 +259,8 @@ class AAAKCodec:
             val = self._parse_atom(token)
             return val, pos + 1
 
-    def _parse_sexp(self, tokens: List[str], pos: int) -> tuple:
-        """Парсит S-выражение рекурсивным descent.
+    def _parse_sexp(self, tokens: List[str], pos: int) -> tuple[Any, int]:
+        """Парсит S-выражение рекурсивным descent. Диспатчит в list/dict режим.
 
         Грамматика:
           sexp ::= '(' symbol [id] item* ')'
@@ -267,62 +294,66 @@ class AAAKCodec:
 
         # ── 2. Определяем режим: список или словарь ──
         is_list = (symbol_token == 'LIST')
-
-        # Смотрим, есть ли :поля в оставшихся токенах до ')'
         has_colon = self._any_colon_before_close(tokens, pos)
 
         if is_list or not has_colon:
-            # ── РЕЖИМ СПИСКА: (LIST ...) или (type val1 val2 ...) ──
-            items = []
-            while pos < len(tokens) and tokens[pos] != ')':
-                val, pos = self._parse_expr(tokens, pos)
-                items.append(val)
-
-            if pos >= len(tokens):
-                raise ValueError("Незакрытое S-выражение: не найдена ')'")
-            pos += 1  # eat ')'
-
-            return items, pos
-
+            return self._parse_list_mode(tokens, pos)
         else:
-            # ── РЕЖИМ СЛОВАРЯ: (TYPE :field value ...) ──
-            result: Dict[str, Any] = {'_raw_type': symbol_token}
+            return self._parse_dict_mode(tokens, pos, symbol_token)
 
-            # Пробуем прочитать id (следующий токен не ':' и не ')')
-            if pos < len(tokens) and tokens[pos] != ')' and not tokens[pos].startswith(':'):
-                result['_raw_id'] = self._parse_atom(tokens[pos])
+    def _parse_list_mode(self, tokens: List[str], pos: int) -> tuple[Any, int]:
+        """Режим списка: (LIST ...) или (type val1 val2 ...) без полей."""
+        items = []
+        while pos < len(tokens) and tokens[pos] != ')':
+            val, pos = self._parse_expr(tokens, pos)
+            items.append(val)
+
+        if pos >= len(tokens):
+            raise ValueError("Незакрытое S-выражение: не найдена ')'")
+        pos += 1  # eat ')'
+
+        return items, pos
+
+    def _parse_dict_mode(self, tokens: List[str], pos: int,
+                         symbol_token: str) -> tuple[Any, int]:
+        """Режим словаря: (TYPE :field value ...)."""
+        result: Dict[str, Any] = {'_raw_type': symbol_token}
+
+        # Пробуем прочитать id (следующий токен не ':' и не ')')
+        if pos < len(tokens) and tokens[pos] != ')' and not tokens[pos].startswith(':'):
+            result['_raw_id'] = self._parse_atom(tokens[pos])
+            pos += 1
+
+        # Парсим именованные поля и позиционные items
+        fields: Dict[str, Any] = {}
+        items: List[Any] = []
+
+        while pos < len(tokens) and tokens[pos] != ')':
+            token = tokens[pos]
+            if token.startswith(':'):
+                # Именованное поле
+                key = token[1:]  # убираем ':'
                 pos += 1
-
-            # Парсим именованные поля и позиционные items
-            fields: Dict[str, Any] = {}
-            items: List[Any] = []
-
-            while pos < len(tokens) and tokens[pos] != ')':
-                token = tokens[pos]
-                if token.startswith(':'):
-                    # Именованное поле
-                    key = token[1:]  # убираем ':'
-                    pos += 1
-                    if pos < len(tokens) and tokens[pos] != ')':
-                        value, pos = self._parse_expr(tokens, pos)
-                    else:
-                        value = None
-                    fields[key] = value
-                else:
-                    # Позиционный item (смешанный стиль)
+                if pos < len(tokens) and tokens[pos] != ')':
                     value, pos = self._parse_expr(tokens, pos)
-                    items.append(value)
+                else:
+                    value = None
+                fields[key] = value
+            else:
+                # Позиционный item (смешанный стиль)
+                value, pos = self._parse_expr(tokens, pos)
+                items.append(value)
 
-            if pos >= len(tokens):
-                raise ValueError("Незакрытое S-выражение: не найдена ')'")
-            pos += 1  # eat ')'
+        if pos >= len(tokens):
+            raise ValueError("Незакрытое S-выражение: не найдена ')'")
+        pos += 1  # eat ')'
 
-            if fields:
-                result['_fields'] = fields
-            if items:
-                result['_items'] = items
+        if fields:
+            result['_fields'] = fields
+        if items:
+            result['_items'] = items
 
-            return result, pos
+        return result, pos
 
     @staticmethod
     def _any_colon_before_close(tokens: List[str], start: int) -> bool:
@@ -341,7 +372,7 @@ class AAAKCodec:
         return False
 
     @staticmethod
-    def _parse_atom(token: str):
+    def _parse_atom(token: str) -> Any:
         """Парсит атомарное значение (число, буль, строка, nil, символ)."""
         # Строка в кавычках
         if token.startswith('"') and token.endswith('"'):
@@ -421,31 +452,70 @@ class AAAKCodec:
     # ──────────────────────────────────────────────
 
     def compress(self, text: str) -> str:
+        """Сжимает произвольный текст в AAAK-формат.
+        Использует RAKE (Rapid Automatic Keyword Extraction) для
+        извлечения ключевых фраз вместо простого TF top-15.
         """
-        Сжимает произвольный текст в AAAK-формат.
-        Извлекает ключевые сущности, удаляет стоп-слова.
-        """
-        # Простая имплементация: извлекаем ключевые слова
-        words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', text)
-        # Удаляем короткие и стоп-слова
+        # RAKE: извлекаем ключевые фразы (n-граммы до 3 слов)
+        # на основе разделения по стоп-словам и знакам препинания
         stop_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be',
                      'been', 'being', 'have', 'has', 'had', 'do', 'does',
                      'did', 'will', 'would', 'could', 'should', 'may', 'might',
                      'shall', 'can', 'need', 'dare', 'ought', 'used', 'to',
                      'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
                      'as', 'into', 'through', 'during', 'before', 'after',
-                     'above', 'below', 'between', 'out', 'off', 'over', 'under'}
-        keywords = [w for w in words if w.lower() not in stop_words and len(w) > 2]
-        # Собираем топ-15 ключевых слов
+                     'above', 'below', 'between', 'out', 'off', 'over', 'under',
+                     'and', 'or', 'but', 'not', 'no', 'nor', 'so', 'yet',
+                     'its', 'it', 'this', 'that', 'these', 'those',
+                     'i', 'you', 'he', 'she', 'we', 'they', 'me', 'him', 'her',
+                     'us', 'them', 'my', 'your', 'his', 'our', 'their'}
+
+        # Токенизируем, сохраняя знаки препинания как разделители
+        words = re.findall(r'\b[a-zA-Zа-яА-Я][a-zA-Zа-яА-Я0-9\']*\b', text.lower())
+
+        # Фаза 1: разбиваем на кандидаты по стоп-словам
+        candidates = []
+        current_phrase = []
+        for w in words:
+            if w in stop_words or len(w) <= 1:
+                if current_phrase:
+                    candidates.append(' '.join(current_phrase))
+                    current_phrase = []
+            else:
+                current_phrase.append(w)
+        if current_phrase:
+            candidates.append(' '.join(current_phrase))
+
+        # Фаза 2: оцениваем каждое слово внутри кандидатов
+        # score(word) = degree(word) / freq(word)
+        word_freq: Dict[str, int] = {}
+        word_degree: Dict[str, int] = {}
+
+        for phrase in candidates:
+            phrase_words = phrase.split()
+            for w in phrase_words:
+                word_freq[w] = word_freq.get(w, 0) + 1
+                word_degree[w] = word_degree.get(w, 0) + len(phrase_words)
+
+        # Score каждой фразы = сумма score слов в ней
+        phrase_scores: Dict[str, float] = {}
+        for phrase in candidates:
+            if not phrase.strip():
+                continue
+            phrase_words = phrase.split()
+            score = sum(word_degree.get(w, 1) / max(word_freq.get(w, 1), 1)
+                       for w in phrase_words)
+            phrase_scores[phrase] = score
+
+        # Топ-10 фраз по score
         from collections import Counter
-        top_keywords = [w for w, _ in Counter(keywords).most_common(15)]
+        top_phrases = [p for p, _ in Counter(phrase_scores).most_common(10)]
 
         return self.encode({
             "type": "COMPRESSED",
-            "content": " ".join(top_keywords),
+            "content": " | ".join(top_phrases) if top_phrases else text[:100],
             "original_length": len(text),
         })
-
 
 # Быстрый тест
 if __name__ == "__main__":

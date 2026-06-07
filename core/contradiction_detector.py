@@ -240,29 +240,6 @@ class ContradictionDetector:
                     ))
 
         return conflicts
-        """Heuristic: two attributes are likely mutually exclusive if they look like alternative classifications."""
-        # Same length-ish, both look like category nouns
-        if abs(len(attr1) - len(attr2)) > 6:
-            return False
-        # Both end with typical category suffixes
-        category_suffixes = ('овоз', 'воз', 'тип', 'класс', 'вид', 'разновидность', 'модель', 'серия')
-        is_cat1 = any(attr1.endswith(s) for s in category_suffixes)
-        is_cat2 = any(attr2.endswith(s) for s in category_suffixes)
-        if is_cat1 and is_cat2:
-            return True
-
-        # Check for verb conflicts: verb:любит vs verb:ненавидит
-        if attr1.startswith("verb:") and attr2.startswith("verb:"):
-            verb1 = attr1[5:]
-            verb2 = attr2[5:]
-            negation_pairs = {
-                "любит": "ненавидит", "любят": "ненавидят",
-                "хочет": "не хочет", "хочет": "нехочет",
-                "знает": "не знает", "может": "не может",
-            }
-            return negation_pairs.get(verb1) == verb2 or negation_pairs.get(verb2) == verb1
-
-        return False
 
     def _are_likely_exclusive(self, attr1: str, attr2: str) -> bool:
         """Heuristic: two attributes are likely mutually exclusive if they look like alternative classifications."""

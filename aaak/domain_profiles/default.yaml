@@ -14,18 +14,3 @@ shortcuts:
   TEMP: "temperature"
   MAXT: "max_tokens"
   STOP: "stop_sequences"
-
-# Шаблоны AAAK-строк для типовых записей
-templates:
-  dialog_turn: |
-    (EVENT dialog_turn
-      :time {timestamp}
-      :agent {agent}
-      :query {query_aaak}
-      :response {response_aaak})
-
-  fact_record: |
-    (FACT {id}
-      :domain {domain}
-      :content {content_aaak}
-      :confidence {confidence})
