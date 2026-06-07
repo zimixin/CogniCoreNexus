@@ -368,6 +368,19 @@ class CogniCoreMCP:
         conflicts = []
         supporting = []
 
+        # Known mutually exclusive category pairs
+        EXCLUSIVE_CATEGORIES = {
+            "электровоз": ["тепловоз", "дизель", "diesel", "паросиловая"],
+            "тепловоз": ["электровоз", "электрический", "electric"],
+            "diesel": ["электровоз", "electric"],
+            "электрический": ["тепловоз", "diesel"],
+            "мужчина": ["женщина"],
+            "женщина": ["мужчина"],
+            "живой": ["мертвый"],
+            "правда": ["ложь"],
+            "да": ["нет"],
+        }
+
         for gene in genes:
             gene_text = (gene.get("full_text") or gene.get("name") or "").lower()
             gene_conf = gene.get("passport", {}).get("confidence", 0.5)
@@ -375,20 +388,35 @@ class CogniCoreMCP:
 
             # Check if gene mentions the subject
             if subject and subject.lower() in gene_text:
-                # Check for direct contradiction
-                if object_val and object_val.lower() in gene_text:
-                    # Same subject and object mentioned - check if classification differs
-                    # This is a simple heuristic - in reality LLM would do better
-                    conflicts.append({
-                        "existing_gene_id": gene["id"],
-                        "existing_text": gene.get("full_text", gene.get("name", "")),
-                        "existing_confidence": gene_conf,
-                        "conflict_type": "classification_mismatch",
-                        "description": f"Найдено утверждение про {subject}: '{gene.get('full_text', gene.get('name', ''))}'",
-                        "severity": "high" if gene_conf > 0.8 else "medium"
-                    })
-                else:
-                    # Related info about subject
+                # Check for classification contradiction
+                contradiction_found = False
+                
+                if object_val:
+                    obj_lower = object_val.lower()
+                    # Check if gene contains an exclusive category
+                    for existing_cat, exclusive_cats in EXCLUSIVE_CATEGORIES.items():
+                        if existing_cat in gene_text and obj_lower in exclusive_cats:
+                            # Found: gene says "subject is existing_cat" but new says "subject is exclusive_cat"
+                            conflicts.append({
+                                "existing_gene_id": gene["id"],
+                                "existing_text": gene.get("full_text", gene.get("name", "")),
+                                "existing_confidence": gene_conf,
+                                "existing_category": existing_cat,
+                                "new_category": obj_lower,
+                                "conflict_type": "classification_mismatch",
+                                "description": f"Конфликт классификации: в базе '{subject}' — {existing_cat}, новое утверждение: {obj_lower}",
+                                "severity": "high" if gene_conf > 0.8 else "medium"
+                            })
+                            contradiction_found = True
+                            break
+                    
+                    # Also check if same subject + different classification in gene
+                    if not contradiction_found and obj_lower in gene_text:
+                        # Same object mentioned - might be same statement
+                        pass
+
+                if not contradiction_found:
+                    # Related info about subject (supporting)
                     supporting.append({
                         "gene_id": gene["id"],
                         "text": gene.get("full_text", gene.get("name", "")),
@@ -418,7 +446,7 @@ class CogniCoreMCP:
             message = "Обнаружены противоречия с высокой достоверностью существующих знаний."
         elif conflicts:
             recommendation = "verify"
-            message = "Найдена связанная информация, требуется проверка."
+            message = "Найдены противоречия в классификации, требуется проверка."
         else:
             recommendation = "safe_to_add"
             message = "Прямых противоречий не найдено."
