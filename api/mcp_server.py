@@ -364,59 +364,41 @@ class CogniCoreMCP:
         genes = recall_result.get("genes", [])
         loci = recall_result.get("loci", [])
 
-        # Analyze for contradictions
+        # Use the same contradiction detector that add_knowledge uses
         conflicts = []
         supporting = []
 
-        # Known mutually exclusive category pairs
-        EXCLUSIVE_CATEGORIES = {
-            "электровоз": ["тепловоз", "дизель", "diesel", "паросиловая"],
-            "тепловоз": ["электровоз", "электрический", "electric"],
-            "diesel": ["электровоз", "electric"],
-            "электрический": ["тепловоз", "diesel"],
-            "мужчина": ["женщина"],
-            "женщина": ["мужчина"],
-            "живой": ["мертвый"],
-            "правда": ["ложь"],
-            "да": ["нет"],
+        # Build a knowledge dict to reuse the detector
+        check_knowledge = {
+            "_type": "gene",
+            "full_text": f"{subject} {predicate} {object_val}".strip(),
+            "subject": subject,
+            "predicate": predicate,
+            "object": object_val
         }
 
+        # Use contradiction detector
+        detector_conflicts = self.nexus.contradiction_detector.check(check_knowledge)
+        for c in detector_conflicts:
+            conflicts.append({
+                "existing_gene_id": c.existing_gene_id,
+                "existing_text": c.existing_text,
+                "existing_confidence": c.existing_confidence,
+                "conflict_type": c.conflict_type.value,
+                "description": c.description,
+                "severity": "high" if c.existing_confidence > 0.8 else "medium"
+            })
+
+        # Also gather supporting info from recall
         for gene in genes:
             gene_text = (gene.get("full_text") or gene.get("name") or "").lower()
             gene_conf = gene.get("passport", {}).get("confidence", 0.5)
             gene_tags = gene.get("tags", [])
 
-            # Check if gene mentions the subject
             if subject and subject.lower() in gene_text:
-                # Check for classification contradiction
-                contradiction_found = False
-                
-                if object_val:
-                    obj_lower = object_val.lower()
-                    # Check if gene contains an exclusive category
-                    for existing_cat, exclusive_cats in EXCLUSIVE_CATEGORIES.items():
-                        if existing_cat in gene_text and obj_lower in exclusive_cats:
-                            # Found: gene says "subject is existing_cat" but new says "subject is exclusive_cat"
-                            conflicts.append({
-                                "existing_gene_id": gene["id"],
-                                "existing_text": gene.get("full_text", gene.get("name", "")),
-                                "existing_confidence": gene_conf,
-                                "existing_category": existing_cat,
-                                "new_category": obj_lower,
-                                "conflict_type": "classification_mismatch",
-                                "description": f"Конфликт классификации: в базе '{subject}' — {existing_cat}, новое утверждение: {obj_lower}",
-                                "severity": "high" if gene_conf > 0.8 else "medium"
-                            })
-                            contradiction_found = True
-                            break
-                    
-                    # Also check if same subject + different classification in gene
-                    if not contradiction_found and obj_lower in gene_text:
-                        # Same object mentioned - might be same statement
-                        pass
-
-                if not contradiction_found:
-                    # Related info about subject (supporting)
+                # Check if this gene is already in conflicts
+                in_conflict = any(c["existing_gene_id"] == gene["id"] for c in conflicts)
+                if not in_conflict:
                     supporting.append({
                         "gene_id": gene["id"],
                         "text": gene.get("full_text", gene.get("name", "")),
@@ -424,10 +406,9 @@ class CogniCoreMCP:
                         "tags": gene_tags
                     })
 
-        # Also check logical facts in inference engine
+        # Check logical facts
         logical_conflicts = []
         if subject and predicate and object_val:
-            # Check for opposite predicate
             negated_pred = f"not_{predicate}" if not predicate.startswith("not_") else predicate[4:]
             existing = self.nexus.inference_engine.query(negated_pred, subject, object_val)
             if existing:
