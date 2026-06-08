@@ -619,5 +619,25 @@ class GenomeManager:
             })
         return results
 
+    def count_agents(self) -> int:
+        """Количество агентов."""
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM agents")
+            return cursor.fetchone()[0]
+        finally:
+            conn.close()
+
+    def count_sessions(self) -> int:
+        """Количество сессий."""
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM sessions")
+            return cursor.fetchone()[0]
+        finally:
+            conn.close()
+
     def __repr__(self) -> str:
         return f"GenomeManager(db={self.db_path.name}, genes={self.count_genes()})"

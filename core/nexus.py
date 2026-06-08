@@ -24,7 +24,7 @@ from cognition.working_memory import WorkingMemory
 from cognition.procedural_memory import ProceduralMemory
 from memory.loci.palace import Palace
 from memory.genome.genome_manager import GenomeManager
-from llm.interface import LLMFactory
+from llm.interface import LLMFactory, NullLLM
 from tools.tool_manager import ToolManager
 from tom.theory_of_mind import TheoryOfMind
 
@@ -142,10 +142,19 @@ class CogniCoreNexus:
         """Инициализация LLM-интерфейса."""
         provider = self.config.get("llm", "provider", default="none")
         import os
-        if provider != "none" and not self.config.get("llm", "api_key", default=""):
+        api_key = self.config.get("llm", "api_key", default="")
+        if provider != "none" and not api_key:
             env_key = os.environ.get("OPENROUTER_API_KEY", "")
             if env_key:
                 self.config.data.setdefault("llm", {})["api_key"] = env_key
+                api_key = env_key
+        # Если после проверки env ключа нет — форсируем NullLLM
+        if provider != "none" and not api_key:
+            logger.warning(
+                "Ключ API не найден. LLM отключена. "
+                "Укажите api_key в data/config.yaml или OPENROUTER_API_KEY в env"
+            )
+            provider = "none"
         self.llm = LLMFactory.create(provider, self.config)
 
     def _init_tools(self):
@@ -153,8 +162,20 @@ class CogniCoreNexus:
         self.tool_manager = ToolManager()
 
     def _init_tom(self):
-        """Инициализация Theory of Mind."""
+        """Инициализация Theory of Mind с загрузкой агентов из genome.db."""
         self.tom = TheoryOfMind()
+        # Загружаем persistent-агентов из genome.db
+        try:
+            for agent in self.genome.list_agents():
+                state = self.tom.register_agent(agent["name"])
+                for b in agent.get("beliefs", []):
+                    state.add_belief(b)
+                for k in agent.get("knowledge", []):
+                    state.add_knowledge(k)
+                for d in agent.get("desires", []):
+                    state.add_desire(d)
+        except Exception as e:
+            logger.warning("Не удалось загрузить агентов ToM: %s", e)
 
     def _init_symbols(self):
         """Инициализация символьного менеджера."""
@@ -202,6 +223,11 @@ class CogniCoreNexus:
         trace.append(f"  L0: найдено {len(l0)} результатов")
         if l0:
             found_loci.extend(l0)
+            # И гены заодно — чтобы не терять контекст
+            l0_genes = self.genome.find_genes(query)
+            found_genes.extend(l0_genes)
+            if l0_genes:
+                trace.append(f"  L0: +{len(l0_genes)} генов")
             trace.append(f"  → STOP на L0 (точное совпадение)")
             stopped_at = "L0"
             results.extend(l0)
@@ -262,7 +288,12 @@ class CogniCoreNexus:
         seen_ids = set()
         deduped = []
         for entry in found_loci:
-            eid = entry.get("id", entry.get("path", ""))
+            # id может быть на верхнем уровне или в entry.id
+            eid = entry.get("id", "")
+            if not eid:
+                eid = entry.get("entry", {}).get("id", "")
+            if not eid:
+                eid = entry.get("path", "")
             if eid and eid not in seen_ids:
                 seen_ids.add(eid)
                 deduped.append(entry)
@@ -341,7 +372,7 @@ class CogniCoreNexus:
         llm_used = False
         llm_chain = getattr(self.llm, "chain", None)
 
-        if self.llm is not None:
+        if self.llm is not None and not isinstance(self.llm, NullLLM):
             provider_name = getattr(self.llm, "name", str(self.llm))
             trace.append(f"[LLM] Отправка запроса ({provider_name})...")
             try:
@@ -350,8 +381,13 @@ class CogniCoreNexus:
                     system=system_prompt,
                     temperature=self.config.get("llm", "temperature", default=0.7),
                 )
-                llm_used = True
-                trace.append(f"  LLM ответ получен ({len(llm_response)} символов)")
+                # Проверяем, не вернул ли провайдер текст ошибки вместо ответа
+                error_prefixes = ("[Ошибка", "[LLM не", "[Fallback:")
+                llm_used = not llm_response.startswith(error_prefixes)
+                if llm_used:
+                    trace.append(f"  LLM ответ получен ({len(llm_response)} символов)")
+                else:
+                    trace.append(f"  LLM вернул сообщение об ошибке")
             except Exception as e:
                 trace.append(f"  LLM ошибка: {e}")
                 llm_response = f"[LLM недоступен: {e}]"
@@ -432,11 +468,17 @@ class CogniCoreNexus:
             "working_memory": self.working_memory.get_all(),
         }
 
-        # Без дубликатов
+        # Дедупликация: записи без id не отбрасываем
         seen_ids = set()
         for entry in loci_results:
             eid = entry.get("id", entry.get("path", ""))
-            if eid and eid not in seen_ids:
+            if not eid:
+                # Нет id/path — используем repr как fallback
+                try:
+                    eid = str(sorted(entry.items())) if isinstance(entry, dict) else str(entry)
+                except Exception:
+                    eid = str(entry)
+            if eid not in seen_ids:
                 seen_ids.add(eid)
                 context["loci_entries"].append(entry)
 
@@ -509,27 +551,56 @@ class CogniCoreNexus:
 
     def _symbolic_response(self, query: str, context: Dict[str, Any],
                            inferences: List[str]) -> str:
-        """Генерация ответа без LLM — только логический вывод и память."""
-        lines = ["[Символьный режим — LLM не подключена]"]
-        lines.append("")
+        """Генерация понятного человеку ответа без LLM."""
+        lines = []
 
-        if context["loci_entries"]:
-            lines.append("Найдено в пространственной памяти:")
-            for entry in context["loci_entries"][:5]:
-                lines.append(f"  • {entry.get('path', 'запись')}")
-                lines.append(f"    {str(entry.get('aaak', entry.get('summary', '')))[:200]}")
+        loci = context.get("loci_entries", [])
+        genes = context.get("genes", [])
 
-        if context["genes"]:
-            lines.append("\nРелевантные понятия:")
-            for gene in context["genes"][:5]:
-                lines.append(f"  • {gene.get('id', '?')}")
+        if not loci and not genes:
+            lines.append(f"По запросу «{query}» ничего не найдено.")
+            lines.append("В системе пока нет информации на эту тему.")
+            lines.append("Попробуй:")
+            lines.append("  • другой запрос")
+            lines.append("  • загрузить данные — /add fact ...")
+            lines.append("  • настроить LLM — укажи api_key в data/config.yaml")
+        else:
+            if loci:
+                lines.append("Нашёл в памяти:")
+                for entry in loci[:5]:
+                    # id может быть на верхнем уровне, в entry.id, или path
+                    sub = entry.get("entry", entry)  # нормализуем вложенность
+                    name = entry.get("id", sub.get("id", entry.get("path", "запись")))
+                    room = entry.get("room_name", "")
+                    summary = sub.get("CON", sub.get("summary", entry.get("aaak", "")))
+                    if room:
+                        name = f"{name} ({room})"
+                    if summary:
+                        if len(summary) > 100:
+                            summary = summary[:100] + "..."
+                        lines.append(f"  • {name} — {summary}")
+                    else:
+                        lines.append(f"  • {name}")
 
-        if inferences:
-            lines.append("\nЛогические выводы:")
-            for inf in inferences[:5]:
-                lines.append(f"  → {inf}")
+            if genes:
+                lines.append("")
+                lines.append("Связанные понятия:")
+                for gene in genes[:5]:
+                    name = gene.get("id", gene.get("name", "?"))
+                    text = gene.get("full_text", "")
+                    if text:
+                        if len(text) > 120:
+                            text = text[:120] + "..."
+                        lines.append(f"  • {name}: {text}")
+                    else:
+                        lines.append(f"  • {name}")
 
-        lines.append("\nДля полноценного ответа настрой подключение LLM в data/config.yaml")
+            if inferences:
+                lines.append("")
+                lines.append("Логические выводы:")
+                for inf in inferences[:5]:
+                    lines.append(f"  → {inf}")
+
         return "\n".join(lines)
 
     def _compute_confidence(self, context: Dict[str, Any],

@@ -412,6 +412,13 @@ def test_contradiction_no_false_positive():
     assert_eq(result["status"], "ok", "без конфликта = ok")
     assert_true("gene_id" in result, "ген создан")
 
+    # Cleanup — не засоряем genome.db
+    for gid in ['a', 'b', 'c']:
+        try:
+            n.genome.delete_gene(gid)
+        except Exception:
+            pass
+
 
 test("Конфликты: прямое отрицание", test_contradiction_direct_negation)
 test("Конфликты: логические факты", test_contradiction_logical_fact)
@@ -896,6 +903,11 @@ def test_resilience():
     # 12.4 Добавление гена с повреждёнными полями
     r4 = n.add_knowledge({"_type": "gene", "id": "", "name": ""})
     assert_eq(r4["status"], "ok", "пустой id гена")  # Должен создать с пустым id
+    # Cleanup
+    try:
+        n.genome.delete_gene("")
+    except Exception:
+        pass
     
     # 12.5 Поиск с пустым запросом
     found = n.genome.find_genes("")
@@ -911,6 +923,13 @@ def test_resilience():
     # 12.7 Получение несуществующего гена
     g = n.genome.get_gene("__nonexistent_12345__")
     assert_true(g is None, "несуществующий ген = None")
+
+    # Cleanup stress genes
+    for i in range(20):
+        try:
+            n.genome.delete_gene(f"stress_{i}")
+        except Exception:
+            pass
 
 test("Устойчивость", test_resilience)
 

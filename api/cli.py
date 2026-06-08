@@ -7,6 +7,7 @@ import sys
 from typing import Any, Dict, Optional
 
 from core.nexus import CogniCoreNexus
+from llm.interface import NullLLM
 
 
 class CogniCoreCLI:
@@ -23,7 +24,7 @@ class CogniCoreCLI:
         print("Инициализация ядра...")
         self.nexus = CogniCoreNexus(config_path)
 
-        llm_status = ("подключена" if self.nexus.llm and self.nexus.llm.model_name
+        llm_status = ("подключена" if not isinstance(self.nexus.llm, NullLLM)
                       else "не подключена (символьный режим)")
         print(f"  LLM: {llm_status}")
         print(f"  Локусов: {len(self.nexus.palace.rooms)}")
@@ -126,16 +127,17 @@ class CogniCoreCLI:
                 self._handle_context()
 
             elif user_input == "/stats":
+                g = self.nexus.genome
                 print(f"\n--- СТАТИСТИКА COGNICORE NEXUS ---")
-                print(f"  Гены: {self.nexus.genome.count_genes()}")
+                print(f"  Гены: {g.count_genes()}")
                 print(f"  Матрицы: {self.nexus.procedural_memory.count()}")
                 print(f"  Комнат: {len(self.nexus.palace.rooms)}")
-                print(f"  Фактов: {len(self.nexus.inference_engine.get_facts())}")
-                print(f"  Символов: {self.nexus.symbol_manager.count()}")
-                print(f"  Агентов ToM: {len(self.nexus.tom.list_agents())}")
-                print(f"  Сессий: {self.nexus.session_id}")
+                print(f"  Фактов: {g.count_genes(type_filter='fact')}")  # факты как гены
+                print(f"  Символов: {g.count_genes(type_filter='symbol')}")  # символы как гены
+                print(f"  Агентов ToM: {g.count_agents()}")
+                print(f"  Сессий: {g.count_sessions()}")
                 print(f"  Рабочая память: {self.nexus.working_memory.count()}/{self.nexus.working_memory.max_size}")
-                print(f"  LLM: {'подключена (' + str(self.nexus.llm) + ')' if self.nexus.llm and self.nexus.llm.model_name and self.nexus.config.get('llm','provider') != 'none' else 'символьный режим'}")
+                print(f"  LLM: {'символьный режим' if isinstance(self.nexus.llm, NullLLM) else 'подключена'}")
 
             elif user_input.startswith("/"):
                 print(f"Неизвестная команда: {user_input}")
@@ -348,24 +350,15 @@ class CogniCoreCLI:
         self._show_help_syntax()
 
     def _handle_query(self, query: str):
-        """Обработать запрос."""
-        print(f"\n[Обработка: {query[:60]}...]\n")
+        """Обработать запрос — понятный вывод для человека."""
         try:
             result = self.nexus.process_query(query)
 
-            print("--- ОТВЕТ ---")
-            print(result["answer"])
-            print()
-
-            if result["trace"]:
-                print(f"--- ТРАССИРОВКА ({len(result['trace'])} шагов) ---")
-                for t in result["trace"][:10]:
-                    print(f"  {t}")
-                if len(result["trace"]) > 10:
-                    print(f"  ... и ещё {len(result['trace']) - 10} шагов")
-
-            print(f"\nУверенность: {result['confidence']:.2f}")
-            print(f"LLM: {'да' if result['llm_used'] else 'нет (символьный режим)'}")
+            answer = result.get("answer", "").strip()
+            if answer:
+                print()
+                print(answer)
+                print()
 
         except Exception as e:
             print(f"[Ошибка] {e}")
